@@ -1,0 +1,5 @@
+beautifulsoup4
+curl-cffi
+playwright
+playwright-recaptcha
+seleniumbase
