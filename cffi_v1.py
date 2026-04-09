@@ -74,13 +74,18 @@ COURT_VALUES = {
     "Tax": "TAX",
 }
 
-_IMPERSONATE_TARGETS = [
-    "safari18_0",
-    "safari15_5",
-    "safari15_3",
-    "safari17_0",
-    "firefox133",
-]
+_IMPERSONATE_TARGETS = ["safari15_5", "safari15_3", "safari18_0"]
+
+SAFARI_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+        "Version/15.5 Safari/605.1.15"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+}
 
 
 def make_output_dir():
@@ -95,6 +100,28 @@ def write_html(name, html, out):
         path = out / "html" / f"{name}.html"
         path.write_text(html, encoding="utf-8")
         log.info(f"  [HTML] -> {path}")
+
+
+def write_bytes(name, content, out, suffix):
+    path = out / f"{name}{suffix}"
+    path.write_bytes(content)
+    log.info(f"  [FILE] -> {path}")
+    return path
+
+
+def has_bot_block(content: str) -> bool:
+    return "Pardon Our Interruption" in content
+
+
+def page_title(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.title.string.strip() if soup.title and soup.title.string else "?"
+
+
+def make_http_session(target: str) -> cffi_requests.Session:
+    session = cffi_requests.Session(impersonate=target)
+    session.headers.update(SAFARI_HEADERS)
+    return session
 
 
 def extract_form_fields(node):
@@ -120,7 +147,7 @@ def get_http_session(probe_url: str | None = None) -> cffi_requests.Session:
     if probe_url:
         for target in _IMPERSONATE_TARGETS:
             try:
-                session = cffi_requests.Session(impersonate=target)
+                session = make_http_session(target)
                 resp = session.get(probe_url, timeout=15, allow_redirects=True)
                 if (
                     resp.status_code == 200
@@ -133,7 +160,7 @@ def get_http_session(probe_url: str | None = None) -> cffi_requests.Session:
                 continue
 
     log.info(f"[HTTP] All probes failed. Falling back to {_IMPERSONATE_TARGETS[0]}")
-    return cffi_requests.Session(impersonate=_IMPERSONATE_TARGETS[0])
+    return make_http_session(_IMPERSONATE_TARGETS[0])
 
 
 def cffi_login(http: cffi_requests.Session, out, otp_code=""):
@@ -143,6 +170,13 @@ def cffi_login(http: cffi_requests.Session, out, otp_code=""):
     )
     log.info(f"  status={resp0.status_code}  url={resp0.url}")
     write_html("01_cffi_landing", resp0.text, out)
+    if has_bot_block(resp0.text):
+        raise RuntimeError(
+            "Imperva bloqueo portal-cloud.\n"
+            "Revisa: output/html/01_cffi_landing.html\n"
+            "Ejecuta: python test_targets.py\n"
+            "Usa IP residencial o bootstrap con browser real."
+        )
 
     idp_login_url = "https://portal.njcourts.gov/pkmslogin.form"
     log.info(f"[2] GET {idp_login_url}")
@@ -154,6 +188,13 @@ def cffi_login(http: cffi_requests.Session, out, otp_code=""):
     )
     log.info(f"  status={resp_login.status_code}  url={resp_login.url}")
     write_html("01b_cffi_idp_login", resp_login.text, out)
+    if has_bot_block(resp_login.text):
+        raise RuntimeError(
+            "Imperva bloqueo pkmslogin.form.\n"
+            "Revisa: output/html/01b_cffi_idp_login.html\n"
+            "Ejecuta: python test_targets.py\n"
+            "HTTP puro no paso challenge JS."
+        )
 
     soup = BeautifulSoup(resp_login.text, "html.parser")
     soup0 = BeautifulSoup(resp0.text, "html.parser")
@@ -172,7 +213,12 @@ def cffi_login(http: cffi_requests.Session, out, otp_code=""):
             soup = soup0
             resp_login = resp0
         else:
-            raise RuntimeError("No se encontro formulario de login")
+            raise RuntimeError(
+                "No se encontro formulario de login.\n"
+                f"SAML title: {page_title(resp0.text)}\n"
+                f"IDP title: {page_title(resp_login.text)}\n"
+                "Revisa: output/html/01_cffi_landing.html y 01b_cffi_idp_login.html"
+            )
 
     form_action = login_form.get("action", "")
     if not form_action:
@@ -334,8 +380,8 @@ def search_civil_case(
     http: cffi_requests.Session,
     form_soup: BeautifulSoup,
     out,
-    docket_num="000009",
-    docket_year="17",
+    docket_num="000054",
+    docket_year="19",
     court_type="Civil Part",
     county="ATLANTIC",
     docket_type="L",
@@ -365,6 +411,7 @@ def search_civil_case(
         fields[field_name] = value
 
     submit_candidates = [
+        "searchByDocForm:searchBtnDummy",
         "searchByDocForm:btnSearch",
         "civilCaseSearchForm:btnSearch",
         "btnSearch",
@@ -382,6 +429,10 @@ def search_civil_case(
     log.info(f"  ViewState: {fields['javax.faces.ViewState'][:40]}...")
     log.info(f"  Court: {court_type} ({court_value})")
     log.info(f"  County: {county} ({county_code})")
+    fields.pop("searchByDocForm:searchBtnDummy", None)
+    fields.pop("civilCaseSearchForm:searchBtnDummy", None)
+
+    print(fields)
 
     resp = http.post(
         CIVIL_SEARCH_URL,
@@ -398,10 +449,82 @@ def search_civil_case(
     write_html("07_search_results", resp.text, out)
 
     content = resp.text
+    if has_bot_block(content):
+        raise RuntimeError("Bloqueado por anti-bot: 'Pardon Our Interruption'")
+
     if "caseSummaryDiv" in content or "idCaseTitle" in content:
-        return [extract_case_summary(content)]
+        data = extract_case_summary(content)
+        pdf_path = maybe_download_summary_pdf(http, resp.url, content, out, data)
+        if pdf_path:
+            data["summary_report_pdf"] = str(pdf_path)
+        return [data]
 
     return extract_table_data_http(http, content, out)
+
+
+def maybe_download_summary_pdf(
+    http: cffi_requests.Session,
+    page_url: str,
+    html: str,
+    out,
+    summary_data: dict | None = None,
+):
+    soup = BeautifulSoup(html, "html.parser")
+    print_form = soup.find("form", id="j_id_2s")
+    print_btn = soup.find("input", {"name": "j_id_2s:printBtn"})
+
+    if not print_form or not print_btn:
+        log.info("  Print summary button no encontrado; no se genera PDF")
+        return None
+
+    action = print_form.get("action", "")
+    if not action:
+        log.warning("  El formulario de print no tiene action")
+        return None
+
+    action_url = urljoin(page_url, action)
+    fields = extract_form_fields(print_form)
+    fields["j_id_2s:printBtn"] = print_btn.get("value", " Create Summary Report ")
+
+    log.info(f"[7] POST {action_url} (summary PDF)")
+    resp = http.post(
+        action_url,
+        data=fields,
+        timeout=CONFIG["timeout"],
+        allow_redirects=True,
+        headers={
+            "Referer": page_url,
+            "Origin": "https://portal.njcourts.gov",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    log.info(
+        "  status=%s  url=%s  content-type=%s",
+        resp.status_code,
+        resp.url,
+        resp.headers.get("Content-Type", ""),
+    )
+
+    content_type = resp.headers.get("Content-Type", "").lower()
+    if "application/pdf" not in content_type:
+        text = resp.text
+        if has_bot_block(text):
+            raise RuntimeError(
+                "Bloqueado por anti-bot al generar el PDF: 'Pardon Our Interruption'"
+            )
+        write_html("08_summary_report_unexpected", text, out)
+        log.warning("  La respuesta del printBtn no fue PDF")
+        return None
+
+    docket_number = ""
+    if summary_data:
+        docket_number = summary_data.get("docket_number", "")
+    docket_number = docket_number.replace("/", "-").replace(" ", "_")
+    docket_number = re.sub(r"[^A-Za-z0-9._-]+", "_", docket_number).strip("_")
+    if not docket_number:
+        docket_number = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    return write_bytes(f"summary_report_{docket_number}", resp.content, out, ".pdf")
 
 
 def extract_case_summary(html: str) -> dict:
