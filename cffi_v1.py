@@ -1,18 +1,26 @@
 """
-NJ Courts Civil Case Scraper — HTTP puro con JSF ViewState
-==========================================================
+NJ Courts Civil Case Scraper — HTTP puro con JSF ViewState + 2Captcha
+=====================================================================
 
 Flujo:
-  1. Probar targets de impersonación hasta encontrar uno funcional.
+  1. Probar targets de impersonación curl_cffi hasta encontrar uno funcional.
   2. Login IBM ISAM (pkmslogin.form) con credenciales + 2FA OTP.
   3. GET formulario civil -> extraer campos JSF y javax.faces.ViewState.
-  4. POST formulario de búsqueda civil.
-  5. Parsear resultados con BeautifulSoup.
+  4. Resolver reCAPTCHA v3 Enterprise con 2Captcha:
+       - type=RecaptchaV3TaskProxyless
+       - isEnterprise=true
+       - pageAction='CivilSearch'
+       - minScore=0.7
+  5. Inyectar el token en searchByDocForm:recaptchaResponse.
+  6. POST formulario de búsqueda civil con ViewState + token reCAPTCHA.
+  7. Parsear resultados con BeautifulSoup.
 """
 
+import os
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
@@ -28,17 +36,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("njcourts")
 
-USER = "CarlosOrtizL"
-PASSWORD = "Abcd123456789@"
-
 CONFIG = {
-    "username": USER,
-    "password": PASSWORD,
+    "username": os.getenv("NJ_USERNAME", ""),
+    "password": os.getenv("NJ_PASSWORD", ""),
     "portal_url": "https://portal-cloud.njcourts.gov/prweb/PRAuth/CloudSAMLAuth?AppName=ESSO",
     "timeout": 30,
     "output_dir": "./output",
     "save_html": True,
-    "fcb_api_key": "3d6be63fcc0b8a4482803636f872425f",
+    "captcha_api_key": os.getenv("TWOCAPTCHA_API_KEY", ""),
 }
 
 CIVIL_SEARCH_URL = "https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces"
@@ -86,6 +91,9 @@ SAFARI_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
 }
+
+CAPTCHA_API_URL = "https://api.2captcha.com"
+RECAPTCHA_SITE_KEY = "6LeSprIqAAAAACbw4xnAsXH42Q4mfXk6t2MB09dq"
 
 
 def make_output_dir():
@@ -161,6 +169,59 @@ def get_http_session(probe_url: str | None = None) -> cffi_requests.Session:
 
     log.info(f"[HTTP] All probes failed. Falling back to {_IMPERSONATE_TARGETS[0]}")
     return make_http_session(_IMPERSONATE_TARGETS[0])
+
+
+def solve_recaptcha_enterprise(api_key, page_url, action="CivilSearch"):
+    log.info("[CAPTCHA] Solicitando token reCAPTCHA v3 2captcha...")
+    create_resp = cffi_requests.post(
+        f"{CAPTCHA_API_URL}/createTask",
+        json={
+            "clientKey": api_key,
+            "task": {
+                "type": "RecaptchaV3TaskProxyless",
+                "websiteURL": page_url,
+                "websiteKey": RECAPTCHA_SITE_KEY,
+                "pageAction": action,
+                "minScore": 0.9,
+                "isEnterprise": True,
+            },
+        },
+        timeout=30,
+    )
+    log.info(f"[CAPTCHA] Response status: {create_resp.status_code}")
+    log.debug(f"[CAPTCHA] Response body: {create_resp.text[:500]}")
+    try:
+        result = create_resp.json()
+    except Exception:
+        raise RuntimeError(
+            f"[CAPTCHA] Respuesta no es JSON. Status: {create_resp.status_code}, "
+            f"Body: {create_resp.text[:300]}"
+        )
+    if result.get("errorId", 0) != 0:
+        raise RuntimeError(f"[CAPTCHA] Error creando task: {result}")
+
+    task_id = result["taskId"]
+    log.info(f"[CAPTCHA] Task creado: {task_id}")
+
+    for attempt in range(60):
+        time.sleep(3)
+        poll_resp = cffi_requests.post(
+            f"{CAPTCHA_API_URL}/getTaskResult",
+            json={"clientKey": api_key, "taskId": task_id},
+            timeout=30,
+        )
+        poll_result = poll_resp.json()
+        if poll_result.get("errorId", 0) != 0:
+            raise RuntimeError(f"[CAPTCHA] Error polling: {poll_result}")
+        if poll_result.get("status") == "ready":
+            token = poll_result["solution"]["gRecaptchaResponse"]
+            log.info(f"[CAPTCHA] Token obtenido ({len(token)} chars)")
+            return token
+        log.debug(
+            f"[CAPTCHA] Polling {attempt + 1}/60 — status: {poll_result.get('status')}"
+        )
+
+    raise RuntimeError("[CAPTCHA] Timeout esperando resolución")
 
 
 def cffi_login(http: cffi_requests.Session, out, otp_code=""):
@@ -380,8 +441,8 @@ def search_civil_case(
     http: cffi_requests.Session,
     form_soup: BeautifulSoup,
     out,
-    docket_num="000054",
-    docket_year="19",
+    docket_num="000222",
+    docket_year="21",
     court_type="Civil Part",
     county="ATLANTIC",
     docket_type="L",
@@ -410,18 +471,11 @@ def search_civil_case(
     for field_name, value in field_mapping.items():
         fields[field_name] = value
 
-    submit_candidates = [
-        "searchByDocForm:searchBtnDummy",
-        "searchByDocForm:btnSearch",
-        "civilCaseSearchForm:btnSearch",
-        "btnSearch",
-    ]
-    for submit_name in submit_candidates:
-        if submit_name in fields:
-            fields[submit_name] = fields.get(submit_name) or "Search"
-            break
-    else:
-        fields["searchByDocForm:btnSearch"] = "Search"
+    # Remover el botón dummy y usar el botón real (btnSearch)
+    fields.pop("searchByDocForm:searchBtnDummy", None)
+    fields.pop("civilCaseSearchForm:searchBtnDummy", None)
+    fields["searchByDocForm:btnSearch"] = "Search"
+    fields["javax.faces.source"] = "searchByDocForm:btnSearch"
 
     if "javax.faces.ViewState" not in fields:
         raise RuntimeError("No se encontro javax.faces.ViewState en el formulario")
@@ -429,13 +483,25 @@ def search_civil_case(
     log.info(f"  ViewState: {fields['javax.faces.ViewState'][:40]}...")
     log.info(f"  Court: {court_type} ({court_value})")
     log.info(f"  County: {county} ({county_code})")
-    fields.pop("searchByDocForm:searchBtnDummy", None)
-    fields.pop("civilCaseSearchForm:searchBtnDummy", None)
 
-    print(fields)
+    # Resolver reCAPTCHA via NextCaptcha
+    if CONFIG.get("captcha_api_key"):
+        captcha_token = solve_recaptcha_enterprise(
+            CONFIG["captcha_api_key"], CIVIL_SEARCH_URL
+        )
+        fields["searchByDocForm:recaptchaResponse"] = captcha_token
+    else:
+        log.warning("[CAPTCHA] No captcha_api_key — enviando sin token válido")
+
+    form_action = form.get("action", "")
+    if form_action and not form_action.startswith("http"):
+        post_url = urljoin(CIVIL_SEARCH_URL, form_action)
+    else:
+        post_url = form_action or CIVIL_SEARCH_URL
+    log.info(f"  POST URL (from form action): {post_url}")
 
     resp = http.post(
-        CIVIL_SEARCH_URL,
+        post_url,
         data=fields,
         timeout=CONFIG["timeout"],
         allow_redirects=True,
@@ -449,6 +515,14 @@ def search_civil_case(
     write_html("07_search_results", resp.text, out)
 
     content = resp.text
+    result_title = page_title(content)
+    log.info(f"  Response title: {result_title}")
+    log.info(f"  Response length: {len(content)} chars")
+    log.info(f"  Contains caseSummaryDiv: {'caseSummaryDiv' in content}")
+    log.info(
+        f"  Contains search form: {'civilCaseSearchForm' in content or 'searchByDocForm' in content}"
+    )
+
     if has_bot_block(content):
         raise RuntimeError("Bloqueado por anti-bot: 'Pardon Our Interruption'")
 
