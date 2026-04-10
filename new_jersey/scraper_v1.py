@@ -61,7 +61,7 @@ CONFIG = {
     "headless": False,  # True = sin ventana (produccion) | False = ver browser (debug)
     # Safari pasa IBM ISAM. Chrome es bloqueado por TLS fingerprint.
     # Si falla, ejecuta test_targets.py para encontrar uno nuevo.
-    "cffi_target": "safari15_3",
+    "cffi_target": "safari15_5",
     # FreeCaptchaBypass API key para resolver reCAPTCHA v3 Enterprise.
     # Registrate en https://freecaptchabypass.com/cp/
     # Si esta vacio se usa el flujo nativo del browser (playwright-recaptcha).
@@ -925,8 +925,8 @@ async def go_to_civil_search(page, context, out, sb=None):
 async def search_civil_case(
     page,
     out,
-    docket_num="000001",
-    docket_year="15",
+    docket_num="000035",
+    docket_year="21",
     court_type="Civil Part",
     county="ATLANTIC",
     docket_type="L",
@@ -1281,6 +1281,61 @@ def export_results(data, out):
     print(f"{len(data)} casos exportados")
 
 
+async def shutdown_seleniumbase_cdp(sb, browser=None):
+    """
+    Cierra Playwright + SeleniumBase CDP sin dejar transports asyncio vivos.
+
+    sb.quit()/sb.stop() programa el cierre del websocket con create_task()
+    pero no espera al subprocess de Chrome. Si asyncio.run() cierra el loop
+    antes de que ese transport se limpie, Python emite:
+      RuntimeError: Event loop is closed
+    """
+    if browser is not None:
+        try:
+            await browser.close()
+        except Exception as e:
+            log.debug(f"  [shutdown] browser.close() fallo: {e}")
+
+    if sb is None:
+        return
+
+    connection = getattr(sb, "connection", None)
+    if connection is not None:
+        try:
+            await connection.aclose()
+            log.debug("  [shutdown] CDP websocket cerrado")
+        except Exception as e:
+            log.debug(f"  [shutdown] connection.aclose() fallo: {e}")
+        finally:
+            try:
+                sb.connection = None
+            except Exception:
+                pass
+
+    proc = getattr(sb, "_process", None)
+    if proc is not None:
+        try:
+            if getattr(proc, "returncode", None) is None:
+                proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=10)
+            log.debug("  [shutdown] Chrome CDP terminado")
+        except Exception as e:
+            log.debug(f"  [shutdown] terminate/wait fallo: {e}")
+            try:
+                if getattr(proc, "returncode", None) is None:
+                    proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=5)
+                log.debug("  [shutdown] Chrome CDP forzado con kill()")
+            except Exception as kill_err:
+                log.debug(f"  [shutdown] kill()/wait() fallo: {kill_err}")
+        finally:
+            try:
+                sb._process = None
+                sb._process_pid = None
+            except Exception:
+                pass
+
+
 # ─────────────────────────────────────────────────────────────
 #  MAIN
 # ─────────────────────────────────────────────────────────────
@@ -1329,6 +1384,8 @@ async def main(otp_code=""):
     log.info(f"  SeleniumBase CDP endpoint: {endpoint_url}")
 
     async with async_playwright() as pw:
+        browser = None
+        page = None
         # Playwright se adjunta al Chrome de SeleniumBase via CDP
         browser = await pw.chromium.connect_over_cdp(endpoint_url)
         context = browser.contexts[0]
@@ -1364,17 +1421,12 @@ async def main(otp_code=""):
             await screenshot(page, "error_final", out)
             raise
         finally:
-            await page.wait_for_timeout(3000)
-            # browser.close() solo desconecta Playwright — no cierra Chrome
-            # sb.quit() cierra el proceso Chrome de SeleniumBase
             try:
-                await browser.close()
+                if page is not None and not page.is_closed():
+                    await page.wait_for_timeout(3000)
             except Exception:
                 pass
-            try:
-                sb.quit()
-            except Exception:
-                pass
+            await shutdown_seleniumbase_cdp(sb, browser)
 
 
 if __name__ == "__main__":
