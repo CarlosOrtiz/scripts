@@ -31,7 +31,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 
-BASE_URL = "https://zing.caudata.me"
+BASE_URL = "https://*****.caudata.me"
 LOGIN_URL = BASE_URL + "/zonatrabajador/index"
 TIRILLA_INDEX_URL = BASE_URL + "/zonatrabajador/tirilla/index"
 
