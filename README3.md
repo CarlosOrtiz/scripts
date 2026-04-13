@@ -141,6 +141,10 @@ Observado empíricamente en los logs con dockets `000001`–`000005`:
 
 ---
 
+## Evidencia de resultados
+
+![Resultados extracción](https://github.com/CarlosOrtiz/scripts/blob/main/img/result.png?raw=true)
+
 ### ⚠️ Workaround manual requerido: ciclo VPN
 
 El flujo real de operación actualmente es:
