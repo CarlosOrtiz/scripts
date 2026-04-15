@@ -1,26 +1,29 @@
 """
-NJ Courts Civil Case Scraper — HTTP puro con JSF ViewState + 2Captcha
+NJ Courts Civil Case Scraper — HTTP puro con JSF ViewState + 2Captcha + IPRoyal
 =====================================================================
 
 Flujo:
-  1. Probar targets de impersonación curl_cffi hasta encontrar uno funcional.
-  2. Login IBM ISAM (pkmslogin.form) con credenciales + 2FA OTP.
-  3. GET formulario civil -> extraer campos JSF y javax.faces.ViewState.
-  4. Resolver reCAPTCHA v3 Enterprise con 2Captcha:
+  1. Verificar proxy IPRoyal residencial USA.
+  2. Probar targets de impersonación curl_cffi hasta encontrar uno funcional.
+  3. Login IBM ISAM (pkmslogin.form) con credenciales + 2FA OTP.
+  4. GET formulario civil -> extraer campos JSF y javax.faces.ViewState.
+  5. Resolver reCAPTCHA v3 Enterprise con 2Captcha:
        - type=RecaptchaV3TaskProxyless
        - isEnterprise=true
        - pageAction='CivilSearch'
-       - minScore=0.7
-  5. Inyectar el token en searchByDocForm:recaptchaResponse.
-  6. POST formulario de búsqueda civil con ViewState + token reCAPTCHA.
-  7. Parsear resultados con BeautifulSoup.
+       - minScore=0.9
+  6. Inyectar el token en searchByDocForm:recaptchaResponse.
+  7. POST formulario de búsqueda civil con ViewState + token reCAPTCHA.
+  8. Parsear resultados con BeautifulSoup.
 """
 
 import os
 import json
 import logging
+import random
 import re
 import time
+import requests
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
@@ -28,6 +31,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 
+# ── Logging ─────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -36,6 +40,46 @@ logging.basicConfig(
 )
 log = logging.getLogger("njcourts")
 
+# ── IPRoyal — credenciales via variables de entorno ──────────────────
+# Configura antes de correr:
+#   export IPROYAL_USER="tu_usuario"
+#   export IPROYAL_PASS="tu_password"
+IPROYAL_HOST = "geo.iproyal.com"
+IPROYAL_PORT = "12322"
+IPROYAL_USER = os.getenv("IPROYAL_USER", "")
+IPROYAL_PASS = os.getenv("IPROYAL_PASS", "")
+IP_SERVICE = "https://api.ipify.org"
+
+
+def get_proxy_url(rotate: bool = False) -> str:
+    user = IPROYAL_USER
+    if rotate:
+        user = f"{IPROYAL_USER}_session-{random.randint(1, 999999)}"
+    return f"socks5://{user}:{IPROYAL_PASS}@{IPROYAL_HOST}:{IPROYAL_PORT}"
+
+
+def verificar_ip_proxy() -> str | None:
+    """Verifica que el proxy funciona y muestra la IP activa."""
+    proxy_url = get_proxy_url()
+    try:
+        resp = requests.get(
+            IP_SERVICE,
+            proxies={"http": proxy_url, "https": proxy_url},
+            timeout=15,
+            verify=False,  # IPRoyal usa cert propio
+        )
+        ip = resp.text.strip()
+        print(f"[PROXY] IP activa: {ip} ✅")
+        return ip
+    except Exception as e:
+        print(f"[PROXY] Error conectando al proxy: {e} ❌")
+        print("[PROXY] Verifica: export IPROYAL_USER=... && export IPROYAL_PASS=...")
+        return None
+
+
+# ────────────────────────────────────────────────────────────────────
+
+# ── Config general ───────────────────────────────────────────────────
 CONFIG = {
     "username": os.getenv("NJ_USERNAME", ""),
     "password": os.getenv("NJ_PASSWORD", ""),
@@ -97,6 +141,7 @@ CAPTCHA_API_URL = "https://api.2captcha.com"
 RECAPTCHA_SITE_KEY = "6LeSprIqAAAAACbw4xnAsXH42Q4mfXk6t2MB09dq"
 
 
+# ── Helpers de archivos ──────────────────────────────────────────────
 def make_output_dir():
     out = Path(CONFIG["output_dir"])
     out.mkdir(parents=True, exist_ok=True)
@@ -118,6 +163,7 @@ def write_bytes(name, content, out, suffix):
     return path
 
 
+# ── Helpers HTML ─────────────────────────────────────────────────────
 def has_bot_block(content: str) -> bool:
     return "Pardon Our Interruption" in content
 
@@ -125,12 +171,6 @@ def has_bot_block(content: str) -> bool:
 def page_title(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     return soup.title.string.strip() if soup.title and soup.title.string else "?"
-
-
-def make_http_session(target: str) -> cffi_requests.Session:
-    session = cffi_requests.Session(impersonate=target)
-    session.headers.update(SAFARI_HEADERS)
-    return session
 
 
 def extract_form_fields(node):
@@ -152,26 +192,39 @@ def extract_form_fields(node):
     return fields
 
 
+# ── Sesión HTTP con proxy IPRoyal ────────────────────────────────────
+def make_http_session(target: str) -> cffi_requests.Session:
+    """Crea sesión curl_cffi con proxy IPRoyal."""
+    # proxy_url = get_proxy_url()
+    session = cffi_requests.Session(impersonate=target)
+    session.headers.update(SAFARI_HEADERS)
+    session.proxies = {
+        "http": get_proxy_url(),
+        "https": get_proxy_url(),
+    }
+    session.verify = False  # IPRoyal usa cert propio
+    return session
+
+
 def get_http_session(probe_url: str | None = None) -> cffi_requests.Session:
+    """Prueba targets de impersonación con proxy IPRoyal."""
     if probe_url:
         for target in _IMPERSONATE_TARGETS:
             try:
                 session = make_http_session(target)
                 resp = session.get(probe_url, timeout=15, allow_redirects=True)
-                if (
-                    resp.status_code == 200
-                    and "Pardon Our Interruption" not in resp.text
-                ):
-                    log.info(f"[HTTP] Using impersonation target: {target}")
+                if resp.status_code == 200 and not has_bot_block(resp.text):
+                    log.info(f"[HTTP] Target funcional: {target}")
                     return session
             except Exception as e:
-                log.debug(f"  [HTTP] Probe failed for {target}: {e}")
+                log.debug(f"  [HTTP] Probe falló para {target}: {e}")
                 continue
 
-    log.info(f"[HTTP] All probes failed. Falling back to {_IMPERSONATE_TARGETS[0]}")
+    log.info(f"[HTTP] Todos los probes fallaron. Usando {_IMPERSONATE_TARGETS[0]}")
     return make_http_session(_IMPERSONATE_TARGETS[0])
 
 
+# ── CAPTCHA ──────────────────────────────────────────────────────────
 def solve_recaptcha_enterprise(api_key, page_url, action="CivilSearch"):
     log.info("[CAPTCHA] Solicitando token reCAPTCHA v3 2captcha...")
     create_resp = cffi_requests.post(
@@ -191,6 +244,7 @@ def solve_recaptcha_enterprise(api_key, page_url, action="CivilSearch"):
     )
     log.info(f"[CAPTCHA] Response status: {create_resp.status_code}")
     log.debug(f"[CAPTCHA] Response body: {create_resp.text[:500]}")
+
     try:
         result = create_resp.json()
     except Exception:
@@ -198,6 +252,7 @@ def solve_recaptcha_enterprise(api_key, page_url, action="CivilSearch"):
             f"[CAPTCHA] Respuesta no es JSON. Status: {create_resp.status_code}, "
             f"Body: {create_resp.text[:300]}"
         )
+
     if result.get("errorId", 0) != 0:
         raise RuntimeError(f"[CAPTCHA] Error creando task: {result}")
 
@@ -225,6 +280,7 @@ def solve_recaptcha_enterprise(api_key, page_url, action="CivilSearch"):
     raise RuntimeError("[CAPTCHA] Timeout esperando resolución")
 
 
+# ── Login ────────────────────────────────────────────────────────────
 def cffi_login(http: cffi_requests.Session, out, otp_code=""):
     log.info(f"[1] GET {CONFIG['portal_url']}")
     resp0 = http.get(
@@ -232,12 +288,12 @@ def cffi_login(http: cffi_requests.Session, out, otp_code=""):
     )
     log.info(f"  status={resp0.status_code}  url={resp0.url}")
     write_html("01_cffi_landing", resp0.text, out)
+
     if has_bot_block(resp0.text):
         raise RuntimeError(
-            "Imperva bloqueo portal-cloud.\n"
+            "Imperva bloqueó portal-cloud.\n"
             "Revisa: output/html/01_cffi_landing.html\n"
-            "Ejecuta: python test_targets.py\n"
-            "Usa IP residencial o bootstrap con browser real."
+            "Verifica credenciales IPRoyal y zona USA."
         )
 
     idp_login_url = "https://portal.njcourts.gov/pkmslogin.form"
@@ -250,12 +306,12 @@ def cffi_login(http: cffi_requests.Session, out, otp_code=""):
     )
     log.info(f"  status={resp_login.status_code}  url={resp_login.url}")
     write_html("01b_cffi_idp_login", resp_login.text, out)
+
     if has_bot_block(resp_login.text):
         raise RuntimeError(
-            "Imperva bloqueo pkmslogin.form.\n"
+            "Imperva bloqueó pkmslogin.form.\n"
             "Revisa: output/html/01b_cffi_idp_login.html\n"
-            "Ejecuta: python test_targets.py\n"
-            "HTTP puro no paso challenge JS."
+            "Verifica que el proxy sea residencial USA."
         )
 
     soup = BeautifulSoup(resp_login.text, "html.parser")
@@ -276,7 +332,7 @@ def cffi_login(http: cffi_requests.Session, out, otp_code=""):
             resp_login = resp0
         else:
             raise RuntimeError(
-                "No se encontro formulario de login.\n"
+                "No se encontró formulario de login.\n"
                 f"SAML title: {page_title(resp0.text)}\n"
                 f"IDP title: {page_title(resp_login.text)}\n"
                 "Revisa: output/html/01_cffi_landing.html y 01b_cffi_idp_login.html"
@@ -330,7 +386,7 @@ def cffi_login(http: cffi_requests.Session, out, otp_code=""):
     if still_login:
         if "Authentication Failed" in resp2.text or "invalid" in resp2.text.lower():
             raise RuntimeError("Credenciales incorrectas")
-        raise RuntimeError(f"Login fallo. URL: {resp2.url}")
+        raise RuntimeError(f"Login falló. URL: {resp2.url}")
 
     is_2fa = (
         "choiceSelect" in resp2.text
@@ -368,7 +424,6 @@ def cffi_handle_2fa(http, url, soup, otp_code, out):
         fields = extract_form_fields(selection_form)
         fields["choice"] = "0"
         fields["operation"] = "verify"
-
         resp = http.post(
             selection_url,
             data=fields,
@@ -385,7 +440,6 @@ def cffi_handle_2fa(http, url, soup, otp_code, out):
 
     hint_span = soup.find("span", id="otpHintSpan")
     hint_text = hint_span.get_text(strip=True) if hint_span else "No disponible"
-
     action_url = urljoin(url, verify_form.get("action"))
     fields = extract_form_fields(verify_form)
 
@@ -407,6 +461,7 @@ def cffi_handle_2fa(http, url, soup, otp_code, out):
     )
 
 
+# ── Navegación y búsqueda civil ──────────────────────────────────────
 def navigate_to_civil_search(http: cffi_requests.Session, out) -> BeautifulSoup:
     esso_url = "https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/"
     log.info(f"[4] GET {esso_url}")
@@ -415,7 +470,7 @@ def navigate_to_civil_search(http: cffi_requests.Session, out) -> BeautifulSoup:
     write_html("04_esso_portal", resp_esso.text, out)
 
     if "login" in resp_esso.url.lower() or "pkmslogin" in resp_esso.url:
-        raise RuntimeError("Sesion invalida")
+        raise RuntimeError("Sesión inválida")
 
     log.info(f"[5] GET {CIVIL_SEARCH_URL}")
     resp_civil = http.get(
@@ -454,7 +509,7 @@ def search_civil_case(
         "form", id="civilCaseSearchForm"
     )
     if not form:
-        raise RuntimeError("No se encontro el form JSF de busqueda")
+        raise RuntimeError("No se encontró el form JSF de búsqueda")
 
     fields = extract_form_fields(form)
 
@@ -468,9 +523,8 @@ def search_civil_case(
         "searchByDocForm:idCivilDocketNum": docket_num,
         "searchByDocForm:idCivilDocketYear": docket_year,
     }
-
-    for field_name, value in field_mapping.items():
-        fields[field_name] = value
+    for k, v in field_mapping.items():
+        fields[k] = v
 
     fields.pop("searchByDocForm:searchBtnDummy", None)
     fields.pop("civilCaseSearchForm:searchBtnDummy", None)
@@ -478,7 +532,7 @@ def search_civil_case(
     fields["javax.faces.source"] = "searchByDocForm:btnSearch"
 
     if "javax.faces.ViewState" not in fields:
-        raise RuntimeError("No se encontro javax.faces.ViewState en el formulario")
+        raise RuntimeError("No se encontró javax.faces.ViewState en el formulario")
 
     log.info(f"  ViewState: {fields['javax.faces.ViewState'][:40]}...")
     log.info(f"  Court: {court_type} ({court_value})")
@@ -497,8 +551,8 @@ def search_civil_case(
         post_url = urljoin(CIVIL_SEARCH_URL, form_action)
     else:
         post_url = form_action or CIVIL_SEARCH_URL
-    log.info(f"  POST URL (from form action): {post_url}")
 
+    log.info(f"  POST URL: {post_url}")
     resp = http.post(
         post_url,
         data=fields,
@@ -514,13 +568,9 @@ def search_civil_case(
     write_html(f"07_search_results_{docket_num}_{docket_year}", resp.text, out)
 
     content = resp.text
-    result_title = page_title(content)
-    log.info(f"  Response title: {result_title}")
+    log.info(f"  Response title: {page_title(content)}")
     log.info(f"  Response length: {len(content)} chars")
     log.info(f"  Contains caseSummaryDiv: {'caseSummaryDiv' in content}")
-    log.info(
-        f"  Contains search form: {'civilCaseSearchForm' in content or 'searchByDocForm' in content}"
-    )
 
     if has_bot_block(content):
         raise RuntimeError("Bloqueado por anti-bot: 'Pardon Our Interruption'")
@@ -529,26 +579,19 @@ def search_civil_case(
     doc_venue = resp_soup.find(id="docVenueTitleDC")
 
     if not doc_venue:
-        log.warning(
-            "[RESULTADO] No se encontró 'docVenueTitleDC' en la respuesta. "
-            "El servidor devolvió el formulario de búsqueda en vez del caso. "
-            "Se reintentará."
-        )
+        log.warning("[RESULTADO] No se encontró 'docVenueTitleDC'. Se reintentará.")
         return None
 
-    log.info(f"  docVenueTitleDC encontrado: {doc_venue.get_text(strip=True)}")
+    log.info(f"  docVenueTitleDC: {doc_venue.get_text(strip=True)}")
 
     print_form = resp_soup.find("form", id="j_id_2s")
     print_btn = resp_soup.find("input", {"name": "j_id_2s:printBtn"})
     if not print_form or not print_btn:
-        log.warning(
-            "[PRINT] Página de caso pero sin botón 'Create Summary Report'. "
-            "Se reintentará."
-        )
+        log.warning("[PRINT] Sin botón 'Create Summary Report'. Se reintentará.")
         return None
 
     data = extract_case_summary(content)
-    log.info(f"  Docket: {data.get('docket_number', '?')}")
+    log.info(f"  Docket:  {data.get('docket_number', '?')}")
     log.info(f"  Caption: {data.get('Case Caption', '?')[:80]}")
 
     pdf_path = maybe_download_summary_pdf(http, resp.url, content, out, data)
@@ -605,9 +648,7 @@ def maybe_download_summary_pdf(
     if "application/pdf" not in content_type:
         text = resp.text
         if has_bot_block(text):
-            raise RuntimeError(
-                "Bloqueado por anti-bot al generar el PDF: 'Pardon Our Interruption'"
-            )
+            raise RuntimeError("Bloqueado por anti-bot al generar el PDF")
         write_html("08_summary_report_unexpected", text, out)
         log.warning("  La respuesta del printBtn no fue PDF")
         return None
@@ -620,9 +661,10 @@ def maybe_download_summary_pdf(
     if not docket_number:
         docket_number = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    return write_bytes(f"{docket_number}", resp.content, out, ".pdf")
+    return write_bytes(docket_number, resp.content, out, ".pdf")
 
 
+# ── Extracción de datos ──────────────────────────────────────────────
 def extract_case_summary(html: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     data = {}
@@ -688,6 +730,7 @@ def export_results(data, out, docket_num="", docket_year=""):
     if not data:
         print("\nNo hay datos para exportar.")
         return
+
     if docket_num and docket_year:
         safe_name = f"docket_{docket_num}_{docket_year}"
     elif docket_num:
@@ -696,28 +739,20 @@ def export_results(data, out, docket_num="", docket_year=""):
         safe_name = f"docket_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", safe_name).strip("_")
-
     json_p = out / f"{safe_name}.json"
     json_p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n[EXPORT] JSON -> {json_p}")
     print(f"{len(data)} casos exportados")
 
 
-# ─────────────────────────────────────────────
-# Generador de docket numbers
-# ─────────────────────────────────────────────
-
-
-def generate_docket_numbers(start: int = 1, end: int = 5):
-    """Genera docket numbers con zero-padding a 6 dígitos: 000001, 000002, …"""
+# ── Generador de docket numbers ──────────────────────────────────────
+def generate_docket_numbers(start: int = 1, end: int = 7):
+    """Genera docket numbers con zero-padding: 000001, 000002, …"""
     for number in range(start, end + 1):
         yield str(number).zfill(6)
 
 
-# ─────────────────────────────────────────────
-# Checkpoint — progreso entre ejecuciones
-# ─────────────────────────────────────────────
-
+# ── Checkpoint ───────────────────────────────────────────────────────
 CHECKPOINT_FILENAME = "checkpoint.json"
 
 
@@ -726,10 +761,9 @@ def checkpoint_path(out: Path) -> Path:
 
 
 def save_checkpoint(out: Path, docket_num: str, docket_year: str) -> None:
-    """Persiste el último docket procesado exitosamente."""
     data = {
-        "last_docket_num": docket_num,  # ej. "000042"
-        "last_docket_int": int(docket_num),  # ej. 42  — para retomar con +1
+        "last_docket_num": docket_num,
+        "last_docket_int": int(docket_num),
         "docket_year": docket_year,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -739,10 +773,6 @@ def save_checkpoint(out: Path, docket_num: str, docket_year: str) -> None:
 
 
 def load_checkpoint(out: Path) -> dict | None:
-    """
-    Lee el checkpoint si existe.
-    Devuelve el dict completo o None si no hay archivo.
-    """
     cp = checkpoint_path(out)
     if not cp.exists():
         return None
@@ -759,20 +789,37 @@ def load_checkpoint(out: Path) -> dict | None:
         return None
 
 
+# ── Main ─────────────────────────────────────────────────────────────
 def main(
-    otp_code="", docket_start: int = 1, docket_end: int = 5, docket_year: str = "21"
+    otp_code="",
+    docket_start: int = 1,
+    docket_end: int = 7,
+    docket_year: str = "21",
 ):
+    # 1. Verificar credenciales
+    if not IPROYAL_USER or not IPROYAL_PASS:
+        print("[ERROR] Faltan credenciales IPRoyal.")
+        print("  export IPROYAL_USER='tu_usuario'")
+        print("  export IPROYAL_PASS='tu_password'")
+        return
+
+    # 2. Verificar proxy
+    ip = verificar_ip_proxy()
+    if not ip:
+        print("\n[ERROR] Proxy no disponible. Verifica credenciales IPRoyal.")
+        return
+
     out = make_output_dir()
 
-    # ── Retomar desde checkpoint si existe ──────────────────────────────────
+    # 3. Checkpoint
     cp = load_checkpoint(out)
     if cp:
         last_int = cp.get("last_docket_int", 0)
-        resume_from = last_int + 1  # el siguiente al último completado
+        resume_from = last_int + 1
         if resume_from > docket_end:
             print(
-                f"\n[CHECKPOINT] Ya se procesaron todos los dockets hasta {str(last_int).zfill(6)}. "
-                "Nada por hacer."
+                f"\n[CHECKPOINT] Ya se procesaron todos los dockets hasta "
+                f"{str(last_int).zfill(6)}. Nada por hacer."
             )
             return
         if resume_from > docket_start:
@@ -781,15 +828,16 @@ def main(
                 f"(último completado: {cp['last_docket_num']})."
             )
             docket_start = resume_from
-    # ────────────────────────────────────────────────────────────────────────
 
-    print("\n[=== curl_cffi: TLS fingerprint Safari ===]")
+    # 4. Sesión HTTP con proxy IPRoyal
+    print("\n[=== curl_cffi: TLS fingerprint Safari + IPRoyal ===]")
     http = get_http_session(probe_url=CONFIG["portal_url"])
 
+    # 5. Login — sesión autenticada se mantiene durante todo el loop
     try:
         http = cffi_login(http, out, otp_code=otp_code)
     except RuntimeError as e:
-        print(f"\nLogin fallo: {e}")
+        print(f"\nLogin falló: {e}")
         return
 
     print(
@@ -799,6 +847,7 @@ def main(
 
     max_retries = CONFIG["max_retries_docket"]
 
+    # 6. Loop de dockets — reutiliza la misma sesión autenticada
     for docket_num in generate_docket_numbers(docket_start, docket_end):
         print(f"\n{'─' * 60}")
         print(f"[DOCKET] Procesando: {docket_num} / {docket_year}")
@@ -808,13 +857,9 @@ def main(
 
         for attempt in range(1, max_retries + 1):
             try:
-                log.info(
-                    f"[INTENTO {attempt}/{max_retries}] "
-                    f"docket={docket_num} — cargando formulario civil..."
-                )
-                # Cada búsqueda recarga el formulario para obtener un ViewState fresco
-                form_soup = navigate_to_civil_search(http, out)
+                log.info(f"[INTENTO {attempt}/{max_retries}] docket={docket_num}")
 
+                form_soup = navigate_to_civil_search(http, out)
                 result = search_civil_case(
                     http,
                     form_soup,
@@ -825,13 +870,11 @@ def main(
 
                 if result is None:
                     log.warning(
-                        f"[INTENTO {attempt}/{max_retries}] "
-                        "Respuesta sin datos de caso. Reintentando..."
+                        f"[INTENTO {attempt}/{max_retries}] Sin datos. Reintentando..."
                     )
                     time.sleep(2)
                     continue
 
-                # Búsqueda exitosa
                 data = result
                 break
 
@@ -841,39 +884,33 @@ def main(
                     time.sleep(2)
                 else:
                     log.error(
-                        f"[DOCKET {docket_num}] Falló tras {max_retries} intentos. "
-                        "Continuando con el siguiente..."
+                        f"[DOCKET {docket_num}] Falló tras {max_retries} intentos."
                     )
 
         if data:
             export_results(data, out, docket_num=docket_num, docket_year=docket_year)
-            # ── Guardar checkpoint solo cuando el docket tuvo éxito ──────────
             save_checkpoint(out, docket_num, docket_year)
         else:
-            log.warning(
-                f"[DOCKET {docket_num}] Sin resultado tras {max_retries} intentos. "
-                "Se omite exportación y checkpoint."
-            )
+            log.warning(f"[DOCKET {docket_num}] Sin resultado. Se omite checkpoint.")
 
     print(
-        f"\n[FIN] Proceso completado para dockets "
+        f"\n[FIN] Proceso completado: dockets "
         f"{str(docket_start).zfill(6)}–{str(docket_end).zfill(6)}."
     )
 
 
+# ── Entry point ──────────────────────────────────────────────────────
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="NJ Courts Scraper — HTTP + JSF ViewState + iteración de dockets"
+        description="NJ Courts Scraper — curl_cffi + IPRoyal + JSF + 2Captcha"
     )
-    parser.add_argument("--otp", default="", help="Codigo OTP 2FA")
+    parser.add_argument("--otp", default="", help="Código OTP 2FA")
     parser.add_argument(
-        "--start", type=int, default=1, help="Primer docket number (default: 1)"
+        "--start", type=int, default=1, help="Primer docket (default: 1)"
     )
-    parser.add_argument(
-        "--end", type=int, default=5, help="Último docket number (default: 5)"
-    )
+    parser.add_argument("--end", type=int, default=7, help="Último docket (default: 7)")
     parser.add_argument("--year", default="21", help="Año del docket (default: 21)")
     args = parser.parse_args()
 
