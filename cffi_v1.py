@@ -44,6 +44,7 @@ CONFIG = {
     "output_dir": "./output",
     "save_html": True,
     "captcha_api_key": os.getenv("TWOCAPTCHA_API_KEY", ""),
+    "max_retries_docket": 3,
 }
 
 CIVIL_SEARCH_URL = "https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces"
@@ -79,7 +80,7 @@ COURT_VALUES = {
     "Tax": "TAX",
 }
 
-_IMPERSONATE_TARGETS = ["safari15_5", "safari15_3", "safari18_0"]
+_IMPERSONATE_TARGETS = ["safari15_3", "safari15_5", "safari18_0"]
 
 SAFARI_HEADERS = {
     "User-Agent": (
@@ -471,7 +472,6 @@ def search_civil_case(
     for field_name, value in field_mapping.items():
         fields[field_name] = value
 
-    # Remover el botón dummy y usar el botón real (btnSearch)
     fields.pop("searchByDocForm:searchBtnDummy", None)
     fields.pop("civilCaseSearchForm:searchBtnDummy", None)
     fields["searchByDocForm:btnSearch"] = "Search"
@@ -484,7 +484,6 @@ def search_civil_case(
     log.info(f"  Court: {court_type} ({court_value})")
     log.info(f"  County: {county} ({county_code})")
 
-    # Resolver reCAPTCHA via NextCaptcha
     if CONFIG.get("captcha_api_key"):
         captcha_token = solve_recaptcha_enterprise(
             CONFIG["captcha_api_key"], CIVIL_SEARCH_URL
@@ -512,7 +511,7 @@ def search_civil_case(
         },
     )
     log.info(f"  status={resp.status_code}  url={resp.url}")
-    write_html("07_search_results", resp.text, out)
+    write_html(f"07_search_results_{docket_num}_{docket_year}", resp.text, out)
 
     content = resp.text
     result_title = page_title(content)
@@ -526,14 +525,37 @@ def search_civil_case(
     if has_bot_block(content):
         raise RuntimeError("Bloqueado por anti-bot: 'Pardon Our Interruption'")
 
-    if "caseSummaryDiv" in content or "idCaseTitle" in content:
-        data = extract_case_summary(content)
-        pdf_path = maybe_download_summary_pdf(http, resp.url, content, out, data)
-        if pdf_path:
-            data["summary_report_pdf"] = str(pdf_path)
-        return [data]
+    resp_soup = BeautifulSoup(content, "html.parser")
+    doc_venue = resp_soup.find(id="docVenueTitleDC")
 
-    return extract_table_data_http(http, content, out)
+    if not doc_venue:
+        log.warning(
+            "[RESULTADO] No se encontró 'docVenueTitleDC' en la respuesta. "
+            "El servidor devolvió el formulario de búsqueda en vez del caso. "
+            "Se reintentará."
+        )
+        return None
+
+    log.info(f"  docVenueTitleDC encontrado: {doc_venue.get_text(strip=True)}")
+
+    print_form = resp_soup.find("form", id="j_id_2s")
+    print_btn = resp_soup.find("input", {"name": "j_id_2s:printBtn"})
+    if not print_form or not print_btn:
+        log.warning(
+            "[PRINT] Página de caso pero sin botón 'Create Summary Report'. "
+            "Se reintentará."
+        )
+        return None
+
+    data = extract_case_summary(content)
+    log.info(f"  Docket: {data.get('docket_number', '?')}")
+    log.info(f"  Caption: {data.get('Case Caption', '?')[:80]}")
+
+    pdf_path = maybe_download_summary_pdf(http, resp.url, content, out, data)
+    if pdf_path:
+        data["pdf"] = str(pdf_path)
+
+    return [data]
 
 
 def maybe_download_summary_pdf(
@@ -598,7 +620,7 @@ def maybe_download_summary_pdf(
     if not docket_number:
         docket_number = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    return write_bytes(f"summary_report_{docket_number}", resp.content, out, ".pdf")
+    return write_bytes(f"{docket_number}", resp.content, out, ".pdf")
 
 
 def extract_case_summary(html: str) -> dict:
@@ -662,115 +684,104 @@ def extract_case_summary(html: str) -> dict:
     return data
 
 
-def extract_table_data_http(http: cffi_requests.Session, html: str, out) -> list:
-    all_rows = []
-    page_num = 1
-
-    while True:
-        log.info(f"  Extrayendo pagina {page_num}...")
-        soup = BeautifulSoup(html, "html.parser")
-
-        headers = [
-            th.get_text(strip=True)
-            for th in soup.select("table th")
-            if th.get_text(strip=True)
-        ]
-
-        page_rows = []
-        for row in soup.select("tbody tr"):
-            cells = row.find_all("td")
-            if not cells:
-                continue
-
-            values = [c.get_text(strip=True) for c in cells]
-            if not any(values):
-                continue
-
-            if headers and len(headers) == len(values):
-                rd = dict(zip(headers, values))
-            else:
-                rd = {f"col_{i}": v for i, v in enumerate(values)}
-
-            hrefs = [
-                a.get("href", "")
-                for a in row.find_all("a", href=True)
-                if a.get("href", "")
-            ]
-            if hrefs:
-                rd["_links"] = "; ".join(hrefs)
-
-            page_rows.append(rd)
-
-        if not page_rows:
-            break
-
-        all_rows.extend(page_rows)
-
-        next_link = None
-        for a in soup.find_all("a"):
-            if a.get_text(strip=True).lower() == "next" and not a.get("disabled"):
-                next_link = a
-                break
-
-        if not next_link:
-            break
-
-        href = next_link.get("href", "")
-        postback_match = re.search(r"__doPostBack\('([^']+)','([^']*)'\)", href)
-        onclick = next_link.get("onclick", "")
-
-        if postback_match:
-            fields = extract_form_fields(soup)
-            fields["__EVENTTARGET"] = postback_match.group(1)
-            fields["__EVENTARGUMENT"] = postback_match.group(2)
-        elif "mojarra.jsfcljs" in onclick or "jsf" in href.lower():
-            fields = extract_form_fields(soup)
-            link_id = next_link.get("id", "")
-            if link_id:
-                fields[link_id] = link_id
-        else:
-            next_url = (
-                href if href.startswith("http") else urljoin(CIVIL_SEARCH_URL, href)
-            )
-            resp = http.get(
-                next_url,
-                timeout=CONFIG["timeout"],
-                headers={"Referer": CIVIL_SEARCH_URL},
-            )
-            html = resp.text
-            page_num += 1
-            continue
-
-        resp = http.post(
-            CIVIL_SEARCH_URL,
-            data=fields,
-            timeout=CONFIG["timeout"],
-            allow_redirects=True,
-            headers={
-                "Referer": CIVIL_SEARCH_URL,
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-        html = resp.text
-        page_num += 1
-
-    log.info(f"  Total: {len(all_rows)} filas")
-    return all_rows
-
-
-def export_results(data, out):
+def export_results(data, out, docket_num="", docket_year=""):
     if not data:
         print("\nNo hay datos para exportar.")
         return
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_p = out / f"docket_{ts}.json"
+    if docket_num and docket_year:
+        safe_name = f"docket_{docket_num}_{docket_year}"
+    elif docket_num:
+        safe_name = f"docket_{docket_num}"
+    else:
+        safe_name = f"docket_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", safe_name).strip("_")
+
+    json_p = out / f"{safe_name}.json"
     json_p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n[EXPORT] JSON -> {json_p}")
     print(f"{len(data)} casos exportados")
 
 
-def main(otp_code=""):
+# ─────────────────────────────────────────────
+# Generador de docket numbers
+# ─────────────────────────────────────────────
+
+
+def generate_docket_numbers(start: int = 1, end: int = 5):
+    """Genera docket numbers con zero-padding a 6 dígitos: 000001, 000002, …"""
+    for number in range(start, end + 1):
+        yield str(number).zfill(6)
+
+
+# ─────────────────────────────────────────────
+# Checkpoint — progreso entre ejecuciones
+# ─────────────────────────────────────────────
+
+CHECKPOINT_FILENAME = "checkpoint.json"
+
+
+def checkpoint_path(out: Path) -> Path:
+    return out / CHECKPOINT_FILENAME
+
+
+def save_checkpoint(out: Path, docket_num: str, docket_year: str) -> None:
+    """Persiste el último docket procesado exitosamente."""
+    data = {
+        "last_docket_num": docket_num,  # ej. "000042"
+        "last_docket_int": int(docket_num),  # ej. 42  — para retomar con +1
+        "docket_year": docket_year,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    cp = checkpoint_path(out)
+    cp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.info(f"[CHECKPOINT] Guardado -> {cp}  (último: {docket_num}/{docket_year})")
+
+
+def load_checkpoint(out: Path) -> dict | None:
+    """
+    Lee el checkpoint si existe.
+    Devuelve el dict completo o None si no hay archivo.
+    """
+    cp = checkpoint_path(out)
+    if not cp.exists():
+        return None
+    try:
+        data = json.loads(cp.read_text(encoding="utf-8"))
+        log.info(
+            f"[CHECKPOINT] Encontrado -> último procesado: "
+            f"{data.get('last_docket_num')} / {data.get('docket_year')}  "
+            f"(guardado: {data.get('saved_at')})"
+        )
+        return data
+    except Exception as e:
+        log.warning(f"[CHECKPOINT] No se pudo leer {cp}: {e}. Se ignora.")
+        return None
+
+
+def main(
+    otp_code="", docket_start: int = 1, docket_end: int = 5, docket_year: str = "21"
+):
     out = make_output_dir()
+
+    # ── Retomar desde checkpoint si existe ──────────────────────────────────
+    cp = load_checkpoint(out)
+    if cp:
+        last_int = cp.get("last_docket_int", 0)
+        resume_from = last_int + 1  # el siguiente al último completado
+        if resume_from > docket_end:
+            print(
+                f"\n[CHECKPOINT] Ya se procesaron todos los dockets hasta {str(last_int).zfill(6)}. "
+                "Nada por hacer."
+            )
+            return
+        if resume_from > docket_start:
+            print(
+                f"\n[CHECKPOINT] Retomando desde {str(resume_from).zfill(6)} "
+                f"(último completado: {cp['last_docket_num']})."
+            )
+            docket_start = resume_from
+    # ────────────────────────────────────────────────────────────────────────
 
     print("\n[=== curl_cffi: TLS fingerprint Safari ===]")
     http = get_http_session(probe_url=CONFIG["portal_url"])
@@ -781,23 +792,94 @@ def main(otp_code=""):
         print(f"\nLogin fallo: {e}")
         return
 
-    print("\n[=== Busqueda civil via HTTP ===]")
-    try:
-        form_soup = navigate_to_civil_search(http, out)
-        data = search_civil_case(http, form_soup, out)
-    except Exception as e:
-        print(f"\nError en busqueda: {e}")
-        return
+    print(
+        f"\n[=== Búsqueda civil — dockets {str(docket_start).zfill(6)} "
+        f"a {str(docket_end).zfill(6)} / año {docket_year} ===]"
+    )
 
-    export_results(data, out)
+    max_retries = CONFIG["max_retries_docket"]
+
+    for docket_num in generate_docket_numbers(docket_start, docket_end):
+        print(f"\n{'─' * 60}")
+        print(f"[DOCKET] Procesando: {docket_num} / {docket_year}")
+        print(f"{'─' * 60}")
+
+        data = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                log.info(
+                    f"[INTENTO {attempt}/{max_retries}] "
+                    f"docket={docket_num} — cargando formulario civil..."
+                )
+                # Cada búsqueda recarga el formulario para obtener un ViewState fresco
+                form_soup = navigate_to_civil_search(http, out)
+
+                result = search_civil_case(
+                    http,
+                    form_soup,
+                    out,
+                    docket_num=docket_num,
+                    docket_year=docket_year,
+                )
+
+                if result is None:
+                    log.warning(
+                        f"[INTENTO {attempt}/{max_retries}] "
+                        "Respuesta sin datos de caso. Reintentando..."
+                    )
+                    time.sleep(2)
+                    continue
+
+                # Búsqueda exitosa
+                data = result
+                break
+
+            except Exception as e:
+                log.error(f"[INTENTO {attempt}/{max_retries}] Error: {e}")
+                if attempt < max_retries:
+                    time.sleep(2)
+                else:
+                    log.error(
+                        f"[DOCKET {docket_num}] Falló tras {max_retries} intentos. "
+                        "Continuando con el siguiente..."
+                    )
+
+        if data:
+            export_results(data, out, docket_num=docket_num, docket_year=docket_year)
+            # ── Guardar checkpoint solo cuando el docket tuvo éxito ──────────
+            save_checkpoint(out, docket_num, docket_year)
+        else:
+            log.warning(
+                f"[DOCKET {docket_num}] Sin resultado tras {max_retries} intentos. "
+                "Se omite exportación y checkpoint."
+            )
+
+    print(
+        f"\n[FIN] Proceso completado para dockets "
+        f"{str(docket_start).zfill(6)}–{str(docket_end).zfill(6)}."
+    )
 
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="NJ Courts Scraper — HTTP + JSF ViewState"
+        description="NJ Courts Scraper — HTTP + JSF ViewState + iteración de dockets"
     )
     parser.add_argument("--otp", default="", help="Codigo OTP 2FA")
+    parser.add_argument(
+        "--start", type=int, default=1, help="Primer docket number (default: 1)"
+    )
+    parser.add_argument(
+        "--end", type=int, default=5, help="Último docket number (default: 5)"
+    )
+    parser.add_argument("--year", default="21", help="Año del docket (default: 21)")
     args = parser.parse_args()
-    main(otp_code=args.otp)
+
+    main(
+        otp_code=args.otp,
+        docket_start=args.start,
+        docket_end=args.end,
+        docket_year=args.year,
+    )
