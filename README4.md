@@ -15,16 +15,6 @@ El objetivo fue encontrar una solución real y funcional para rotar IP en cada e
 
 Usamos Tor con la señal `NEWNYM` para cambiar de circuito y obtener una IP nueva en cada ejecución.
 
-```python
-from stem import Signal
-from stem.control import Controller
-
-with Controller.from_port(port=9051) as ctrl:
-    ctrl.authenticate()
-    ctrl.signal(Signal.NEWNYM)
-    time.sleep(ctrl.get_newnym_wait())
-```
-
 ### Log de resultado
 
 ```
@@ -282,3 +272,252 @@ def get_proxy_url() -> str:
 ### Recomendación
  
 Empezar sin rotación. Si Imperva bloquea después de muchos dockets, activar `_streaming-1` en `get_proxy_url()`. Para el volumen típico de este scraper no es necesario desde el inicio.
+
+logs
+```
+22:33:02 [DEBUG] Starting new HTTPS connection (1): api.ipify.org:443
+/Users/caol/.pyenv/versions/3.12.13/lib/python3.12/site-packages/urllib3/connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'api.ipify.org'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+22:33:03 [DEBUG] https://api.ipify.org:443 "GET / HTTP/1.1" 200 11
+[PROXY] IP activa: 73.10.98.19 ✅
+22:33:03 [INFO] [CHECKPOINT] Encontrado -> último procesado: 000007 / 21  (guardado: 2026-04-14T22:25:19)
+
+[CHECKPOINT] Retomando desde 000008 (último completado: 000007).
+
+[=== curl_cffi: TLS fingerprint Safari + IPRoyal ===]
+22:33:06 [INFO] [HTTP] Target funcional: safari15_3
+22:33:06 [INFO] [1] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/CloudSAMLAuth?AppName=ESSO
+22:33:07 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/CloudSAMLAuth?AppName=ESSO
+22:33:07 [INFO]   [HTML] -> output/html/01_cffi_landing.html
+22:33:07 [INFO] [2] GET https://portal.njcourts.gov/pkmslogin.form
+22:33:09 [INFO]   status=500  url=https://portal.njcourts.gov/pkmslogin.form
+22:33:09 [INFO]   [HTML] -> output/html/01b_cffi_idp_login.html
+22:33:09 [INFO] [3] POST https://portal-cloud.njcourts.gov/pkmslogin.form
+22:33:11 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/default/CiqhCm6F71NzfFYz9kC01ILonOXvI_1W*/!STANDARD?AppName=ESSO
+22:33:11 [INFO]   [HTML] -> output/html/02_cffi_post_login.html
+22:33:11 [INFO]   Autenticacion exitosa
+
+[=== Búsqueda civil — dockets 000008 a 000010 / año 21 ===]
+
+────────────────────────────────────────────────────────────
+[DOCKET] Procesando: 000008 / 21
+────────────────────────────────────────────────────────────
+22:33:11 [INFO] [INTENTO 1/3] docket=000008
+22:33:11 [INFO] [4] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:33:11 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:33:11 [INFO]   [HTML] -> output/html/04_esso_portal.html
+22:33:11 [INFO] [5] GET https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:33:12 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:33:12 [INFO]   [HTML] -> output/html/05_civil_search_form.html
+22:33:12 [INFO]   Formulario civil cargado via HTTP
+22:33:12 [INFO] 
+[6] county=ATLANTIC docket=000008/21
+22:33:12 [INFO]   ViewState: Ct1k4VoLjnvJQHnrgzCLYzM9OYyV6JEyQd//jlIN...
+22:33:12 [INFO]   Court: Civil Part (LCV)
+22:33:12 [INFO]   County: ATLANTIC (ATL)
+22:33:12 [INFO] [CAPTCHA] Solicitando token reCAPTCHA v3 2captcha...
+22:33:12 [INFO] [CAPTCHA] Response status: 200
+22:33:12 [DEBUG] [CAPTCHA] Response body: {"errorId":0,"taskId":82427222382}
+22:33:12 [INFO] [CAPTCHA] Task creado: 82427222382
+22:33:16 [DEBUG] [CAPTCHA] Polling 1/60 — status: processing
+22:33:19 [DEBUG] [CAPTCHA] Polling 2/60 — status: processing
+22:33:23 [DEBUG] [CAPTCHA] Polling 3/60 — status: processing
+22:33:27 [DEBUG] [CAPTCHA] Polling 4/60 — status: processing
+22:33:30 [DEBUG] [CAPTCHA] Polling 5/60 — status: processing
+22:33:34 [DEBUG] [CAPTCHA] Polling 6/60 — status: processing
+22:33:37 [DEBUG] [CAPTCHA] Polling 7/60 — status: processing
+22:33:41 [DEBUG] [CAPTCHA] Polling 8/60 — status: processing
+22:33:45 [DEBUG] [CAPTCHA] Polling 9/60 — status: processing
+22:33:48 [DEBUG] [CAPTCHA] Polling 10/60 — status: processing
+22:33:52 [DEBUG] [CAPTCHA] Polling 11/60 — status: processing
+22:33:57 [DEBUG] [CAPTCHA] Polling 12/60 — status: processing
+22:34:01 [DEBUG] [CAPTCHA] Polling 13/60 — status: processing
+22:34:04 [DEBUG] [CAPTCHA] Polling 14/60 — status: processing
+22:34:08 [DEBUG] [CAPTCHA] Polling 15/60 — status: processing
+22:34:11 [INFO] [CAPTCHA] Token obtenido (2148 chars)
+22:34:11 [INFO]   POST URL: https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=1
+22:34:12 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=1
+22:34:12 [INFO]   [HTML] -> output/html/07_search_results_000008_21.html
+22:34:12 [INFO]   Response title: eCourts Civil Case Jacket
+22:34:12 [INFO]   Response length: 60437 chars
+22:34:12 [INFO]   Contains caseSummaryDiv: True
+22:34:12 [INFO]   docVenueTitleDC: ATL
+22:34:12 [INFO]   Docket:  ATL-L-000008-21
+22:34:12 [INFO]   Caption: Thames Ebony  Vs Bally'S Wild Wild We St Casino
+22:34:12 [INFO] [7] POST https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSummary.faces?cid=1 (summary PDF)
+22:34:14 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSummary.faces?cid=1  content-type=application/pdf
+22:34:14 [INFO]   [FILE] -> output/ATL-L-000008-21.pdf
+
+[EXPORT] JSON -> output/docket_000008_21.json
+1 casos exportados
+22:34:14 [INFO] [CHECKPOINT] Guardado -> output/checkpoint.json  (último: 000008/21)
+
+────────────────────────────────────────────────────────────
+[DOCKET] Procesando: 000009 / 21
+────────────────────────────────────────────────────────────
+22:34:14 [INFO] [INTENTO 1/3] docket=000009
+22:34:14 [INFO] [4] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:34:14 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:34:14 [INFO]   [HTML] -> output/html/04_esso_portal.html
+22:34:14 [INFO] [5] GET https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:34:14 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:34:14 [INFO]   [HTML] -> output/html/05_civil_search_form.html
+22:34:14 [INFO]   Formulario civil cargado via HTTP
+22:34:14 [INFO] 
+[6] county=ATLANTIC docket=000009/21
+22:34:14 [INFO]   ViewState: vdZh1kjHZx1XiaggqtxA+Dj6goMAmuosrgpjesaM...
+22:34:14 [INFO]   Court: Civil Part (LCV)
+22:34:14 [INFO]   County: ATLANTIC (ATL)
+22:34:14 [INFO] [CAPTCHA] Solicitando token reCAPTCHA v3 2captcha...
+22:34:15 [INFO] [CAPTCHA] Response status: 200
+22:34:15 [DEBUG] [CAPTCHA] Response body: {"errorId":0,"taskId":82427227355}
+22:34:15 [INFO] [CAPTCHA] Task creado: 82427227355
+22:34:18 [DEBUG] [CAPTCHA] Polling 1/60 — status: processing
+22:34:22 [DEBUG] [CAPTCHA] Polling 2/60 — status: processing
+22:34:25 [DEBUG] [CAPTCHA] Polling 3/60 — status: processing
+22:34:29 [DEBUG] [CAPTCHA] Polling 4/60 — status: processing
+22:34:32 [INFO] [CAPTCHA] Token obtenido (2190 chars)
+22:34:32 [INFO]   POST URL: https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=2
+22:34:33 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=2
+22:34:33 [INFO]   [HTML] -> output/html/07_search_results_000009_21.html
+22:34:33 [INFO]   Response title: eCourts Civil Case Jacket
+22:34:33 [INFO]   Response length: 22274 chars
+22:34:33 [INFO]   Contains caseSummaryDiv: False
+22:34:33 [WARNING] [RESULTADO] No se encontró 'docVenueTitleDC'. Se reintentará.
+22:34:33 [WARNING] [INTENTO 1/3] Sin datos. Reintentando...
+22:34:35 [INFO] [INTENTO 2/3] docket=000009
+22:34:35 [INFO] [4] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:34:35 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:34:35 [INFO]   [HTML] -> output/html/04_esso_portal.html
+22:34:35 [INFO] [5] GET https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:34:36 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:34:36 [INFO]   [HTML] -> output/html/05_civil_search_form.html
+22:34:36 [INFO]   Formulario civil cargado via HTTP
+22:34:36 [INFO] 
+[6] county=ATLANTIC docket=000009/21
+22:34:36 [INFO]   ViewState: yvdK5nAWWnHkCn5pBvkWUu02D6sUU0FjMqYGCnMw...
+22:34:36 [INFO]   Court: Civil Part (LCV)
+22:34:36 [INFO]   County: ATLANTIC (ATL)
+22:34:36 [INFO] [CAPTCHA] Solicitando token reCAPTCHA v3 2captcha...
+22:34:37 [INFO] [CAPTCHA] Response status: 200
+22:34:37 [DEBUG] [CAPTCHA] Response body: {"errorId":0,"taskId":82427228994}
+22:34:37 [INFO] [CAPTCHA] Task creado: 82427228994
+22:34:40 [DEBUG] [CAPTCHA] Polling 1/60 — status: processing
+22:34:44 [DEBUG] [CAPTCHA] Polling 2/60 — status: processing
+22:34:47 [DEBUG] [CAPTCHA] Polling 3/60 — status: processing
+22:34:51 [DEBUG] [CAPTCHA] Polling 4/60 — status: processing
+22:34:54 [DEBUG] [CAPTCHA] Polling 5/60 — status: processing
+22:34:58 [DEBUG] [CAPTCHA] Polling 6/60 — status: processing
+22:35:01 [DEBUG] [CAPTCHA] Polling 7/60 — status: processing
+22:35:05 [DEBUG] [CAPTCHA] Polling 8/60 — status: processing
+22:35:08 [INFO] [CAPTCHA] Token obtenido (2212 chars)
+22:35:08 [INFO]   POST URL: https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=3
+22:35:09 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=3
+22:35:09 [INFO]   [HTML] -> output/html/07_search_results_000009_21.html
+22:35:09 [INFO]   Response title: eCourts Civil Case Jacket
+22:35:09 [INFO]   Response length: 22295 chars
+22:35:09 [INFO]   Contains caseSummaryDiv: False
+22:35:09 [WARNING] [RESULTADO] No se encontró 'docVenueTitleDC'. Se reintentará.
+22:35:09 [WARNING] [INTENTO 2/3] Sin datos. Reintentando...
+22:35:11 [INFO] [INTENTO 3/3] docket=000009
+22:35:11 [INFO] [4] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:35:11 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:35:11 [INFO]   [HTML] -> output/html/04_esso_portal.html
+22:35:11 [INFO] [5] GET https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:35:11 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:35:11 [INFO]   [HTML] -> output/html/05_civil_search_form.html
+22:35:11 [INFO]   Formulario civil cargado via HTTP
+22:35:11 [INFO] 
+[6] county=ATLANTIC docket=000009/21
+22:35:11 [INFO]   ViewState: vI2RcPGaSCmJpnBV+IUs+QIH5Ip86CzB5sWMkIAr...
+22:35:11 [INFO]   Court: Civil Part (LCV)
+22:35:11 [INFO]   County: ATLANTIC (ATL)
+22:35:11 [INFO] [CAPTCHA] Solicitando token reCAPTCHA v3 2captcha...
+22:35:12 [INFO] [CAPTCHA] Response status: 200
+22:35:12 [DEBUG] [CAPTCHA] Response body: {"errorId":0,"taskId":82427231781}
+22:35:12 [INFO] [CAPTCHA] Task creado: 82427231781
+22:35:15 [DEBUG] [CAPTCHA] Polling 1/60 — status: processing
+22:35:19 [DEBUG] [CAPTCHA] Polling 2/60 — status: processing
+22:35:22 [DEBUG] [CAPTCHA] Polling 3/60 — status: processing
+22:35:25 [DEBUG] [CAPTCHA] Polling 4/60 — status: processing
+22:35:29 [DEBUG] [CAPTCHA] Polling 5/60 — status: processing
+22:35:32 [DEBUG] [CAPTCHA] Polling 6/60 — status: processing
+22:35:36 [DEBUG] [CAPTCHA] Polling 7/60 — status: processing
+22:35:39 [DEBUG] [CAPTCHA] Polling 8/60 — status: processing
+22:35:43 [DEBUG] [CAPTCHA] Polling 9/60 — status: processing
+22:35:47 [DEBUG] [CAPTCHA] Polling 10/60 — status: processing
+22:35:50 [INFO] [CAPTCHA] Token obtenido (2190 chars)
+22:35:50 [INFO]   POST URL: https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=4
+22:35:51 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=4
+22:35:51 [INFO]   [HTML] -> output/html/07_search_results_000009_21.html
+22:35:51 [INFO]   Response title: eCourts Civil Case Jacket
+22:35:51 [INFO]   Response length: 22142 chars
+22:35:51 [INFO]   Contains caseSummaryDiv: False
+22:35:51 [WARNING] [RESULTADO] No se encontró 'docVenueTitleDC'. Se reintentará.
+22:35:51 [WARNING] [INTENTO 3/3] Sin datos. Reintentando...
+22:35:53 [WARNING] [DOCKET 000009] Sin resultado. Se omite checkpoint.
+
+────────────────────────────────────────────────────────────
+[DOCKET] Procesando: 000010 / 21
+────────────────────────────────────────────────────────────
+22:35:53 [INFO] [INTENTO 1/3] docket=000010
+22:35:53 [INFO] [4] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:35:53 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:35:53 [INFO]   [HTML] -> output/html/04_esso_portal.html
+22:35:53 [INFO] [5] GET https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:35:54 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:35:54 [INFO]   [HTML] -> output/html/05_civil_search_form.html
+22:35:54 [INFO]   Formulario civil cargado via HTTP
+22:35:54 [INFO] 
+[6] county=ATLANTIC docket=000010/21
+22:35:54 [INFO]   ViewState: t2+e61cmSGOFSDz1rNGS9dxB8jtcRmWy8b9PiV2Q...
+22:35:54 [INFO]   Court: Civil Part (LCV)
+22:35:54 [INFO]   County: ATLANTIC (ATL)
+22:35:54 [INFO] [CAPTCHA] Solicitando token reCAPTCHA v3 2captcha...
+22:35:54 [INFO] [CAPTCHA] Response status: 200
+22:35:54 [DEBUG] [CAPTCHA] Response body: {"errorId":0,"taskId":82427235055}
+22:35:54 [INFO] [CAPTCHA] Task creado: 82427235055
+22:35:58 [DEBUG] [CAPTCHA] Polling 1/60 — status: processing
+22:36:01 [DEBUG] [CAPTCHA] Polling 2/60 — status: processing
+22:36:05 [DEBUG] [CAPTCHA] Polling 3/60 — status: processing
+22:36:08 [DEBUG] [CAPTCHA] Polling 4/60 — status: processing
+22:36:12 [DEBUG] [CAPTCHA] Polling 5/60 — status: processing
+22:36:15 [DEBUG] [CAPTCHA] Polling 6/60 — status: processing
+22:36:19 [DEBUG] [CAPTCHA] Polling 7/60 — status: processing
+22:36:22 [DEBUG] [CAPTCHA] Polling 8/60 — status: processing
+22:36:25 [DEBUG] [CAPTCHA] Polling 9/60 — status: processing
+22:36:29 [DEBUG] [CAPTCHA] Polling 10/60 — status: processing
+22:36:33 [INFO] [CAPTCHA] Token obtenido (2212 chars)
+22:36:33 [INFO]   POST URL: https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=5
+22:36:33 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces?cid=5
+22:36:33 [INFO]   [HTML] -> output/html/07_search_results_000010_21.html
+22:36:33 [INFO]   Response title: Pardon Our Interruption
+22:36:33 [INFO]   Response length: 7426 chars
+22:36:33 [INFO]   Contains caseSummaryDiv: False
+22:36:33 [ERROR] [INTENTO 1/3] Error: Bloqueado por anti-bot: 'Pardon Our Interruption'
+22:36:35 [INFO] [INTENTO 2/3] docket=000010
+22:36:35 [INFO] [4] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:36:36 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:36:36 [INFO]   [HTML] -> output/html/04_esso_portal.html
+22:36:36 [INFO] [5] GET https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:36:36 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:36:36 [INFO]   [HTML] -> output/html/05_civil_search_form.html
+22:36:36 [ERROR] [INTENTO 2/3] Error: Formulario civil no encontrado
+22:36:38 [INFO] [INTENTO 3/3] docket=000010
+22:36:38 [INFO] [4] GET https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:36:39 [INFO]   status=200  url=https://portal-cloud.njcourts.gov/prweb/PRAuth/app/ESSOPortal/
+22:36:39 [INFO]   [HTML] -> output/html/04_esso_portal.html
+22:36:39 [INFO] [5] GET https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:36:39 [INFO]   status=200  url=https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces
+22:36:39 [INFO]   [HTML] -> output/html/05_civil_search_form.html
+22:36:39 [ERROR] [INTENTO 3/3] Error: Formulario civil no encontrado
+22:36:39 [ERROR] [DOCKET 000010] Falló tras 3 intentos.
+22:36:39 [WARNING] [DOCKET 000010] Sin resultado. Se omite checkpoint.
+
+[FIN] Proceso completado: dockets 000008–000010.
+```
+
+## Evidencia de resultados
+
+![Resultados extracción](https://github.com/CarlosOrtiz/scripts/blob/main/img/result_v2.png?raw=true)
+
