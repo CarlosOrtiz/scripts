@@ -5,6 +5,7 @@ __pycache__/
 
 .claude
 .claude/
+CLAUDE.md
 AGENTS.md
 # C extensions
 *.so
