@@ -746,7 +746,7 @@ def export_results(data, out, docket_num="", docket_year=""):
 
 
 # ── Generador de docket numbers ──────────────────────────────────────
-def generate_docket_numbers(start: int = 1, end: int = 7):
+def generate_docket_numbers(start: int = 1, end: int = 10):
     """Genera docket numbers con zero-padding: 000001, 000002, …"""
     for number in range(start, end + 1):
         yield str(number).zfill(6)
@@ -793,7 +793,7 @@ def load_checkpoint(out: Path) -> dict | None:
 def main(
     otp_code="",
     docket_start: int = 1,
-    docket_end: int = 7,
+    docket_end: int = 10,
     docket_year: str = "21",
 ):
     # 1. Verificar credenciales
@@ -910,7 +910,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--start", type=int, default=1, help="Primer docket (default: 1)"
     )
-    parser.add_argument("--end", type=int, default=7, help="Último docket (default: 7)")
+    parser.add_argument(
+        "--end", type=int, default=10, help="Último docket (default: 10)"
+    )
     parser.add_argument("--year", default="21", help="Año del docket (default: 21)")
     args = parser.parse_args()
 
