@@ -1,20 +1,6 @@
 """
 NJ Courts Civil Case Scraper — HTTP puro con JSF ViewState + 2Captcha + IPRoyal
 =====================================================================
-
-Flujo:
-  1. Verificar proxy IPRoyal residencial USA.
-  2. Probar targets de impersonación curl_cffi hasta encontrar uno funcional.
-  3. Login IBM ISAM (pkmslogin.form) con credenciales + 2FA OTP.
-  4. GET formulario civil -> extraer campos JSF y javax.faces.ViewState.
-  5. Resolver reCAPTCHA v3 Enterprise con 2Captcha:
-       - type=RecaptchaV3TaskProxyless
-       - isEnterprise=true
-       - pageAction='CivilSearch'
-       - minScore=0.9
-  6. Inyectar el token en searchByDocForm:recaptchaResponse.
-  7. POST formulario de búsqueda civil con ViewState + token reCAPTCHA.
-  8. Parsear resultados con BeautifulSoup.
 """
 
 import os
@@ -24,12 +10,19 @@ import random
 import re
 import time
 import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
+from dotenv import load_dotenv
+from pathlib import Path
+
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 # ── Logging ─────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -77,8 +70,6 @@ def verificar_ip_proxy() -> str | None:
         return None
 
 
-# ────────────────────────────────────────────────────────────────────
-
 # ── Config general ───────────────────────────────────────────────────
 CONFIG = {
     "username": os.getenv("NJ_USERNAME", ""),
@@ -88,7 +79,7 @@ CONFIG = {
     "output_dir": "./output",
     "save_html": True,
     "captcha_api_key": os.getenv("TWOCAPTCHA_API_KEY", ""),
-    "max_retries_docket": 3,
+    "max_retries_docket": 1,
 }
 
 CIVIL_SEARCH_URL = "https://portal.njcourts.gov/webcivilcj/CIVILCaseJacketWeb/pages/civilCaseSearch.faces"
@@ -498,7 +489,7 @@ def search_civil_case(
     form_soup: BeautifulSoup,
     out,
     docket_num="000222",
-    docket_year="21",
+    docket_year="26",
     court_type="Civil Part",
     county="ATLANTIC",
     docket_type="L",
@@ -746,7 +737,7 @@ def export_results(data, out, docket_num="", docket_year=""):
 
 
 # ── Generador de docket numbers ──────────────────────────────────────
-def generate_docket_numbers(start: int = 1, end: int = 10):
+def generate_docket_numbers(start: int = 1, end: int = 3):
     """Genera docket numbers con zero-padding: 000001, 000002, …"""
     for number in range(start, end + 1):
         yield str(number).zfill(6)
@@ -793,8 +784,8 @@ def load_checkpoint(out: Path) -> dict | None:
 def main(
     otp_code="",
     docket_start: int = 1,
-    docket_end: int = 10,
-    docket_year: str = "21",
+    docket_end: int = 3,
+    docket_year: str = "26",
 ):
     # 1. Verificar credenciales
     if not IPROYAL_USER or not IPROYAL_PASS:
@@ -910,10 +901,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--start", type=int, default=1, help="Primer docket (default: 1)"
     )
-    parser.add_argument(
-        "--end", type=int, default=10, help="Último docket (default: 10)"
-    )
-    parser.add_argument("--year", default="21", help="Año del docket (default: 21)")
+    parser.add_argument("--end", type=int, default=3, help="Último docket (default: 3)")
+    parser.add_argument("--year", default="26", help="Año del docket (default: 26)")
     args = parser.parse_args()
 
     main(
